@@ -1,6 +1,6 @@
 ## Demo
 
-https://github.com/user-attachments/assets/slack_demo.mov
+https://github.com/Tejesh0209/Langchain-SlackBot/raw/main/slack_demo.mp4
 
 > Ask it anything about your customer data — it figures out whether to query SQL, search documents, or both.
 
