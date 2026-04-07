@@ -41,3 +41,6 @@ data/weaviate/
 *.log
 logs/
 slack_demo.mov
+
+# Claude
+.claude/
