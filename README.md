@@ -1,3 +1,11 @@
+## Demo
+
+https://github.com/user-attachments/assets/slack_demo.mov
+
+> Ask it anything about your customer data — it figures out whether to query SQL, search documents, or both.
+
+---
+
 ## How I Approached This Problem
 
 Honestly my first thought was just — call GPT, pass the question, done. That approach works for maybe 2 out of 10 queries. Then I tried it for "which customers are expanding AND have contract above 1M?" and obviously that needs SQL. Then I tried "what failure patterns show up across BlueHarbor's support calls?" and that needs semantic document search. So I had to actually think properly.
