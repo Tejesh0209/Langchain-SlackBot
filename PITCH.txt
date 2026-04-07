@@ -1,0 +1,319 @@
+
+----------------------------------------------------------------
+OPENING — SET THE SCENE (1 min)
+----------------------------------------------------------------
+
+"So let me start with the actual problem.
+
+A sales or customer success team has data sitting in two places.
+Structured data — customer names, contract values, account health,
+CRM stages — all in a database. And unstructured data — call
+transcripts, support tickets, internal documents, competitor notes
+— sitting in a vector store.
+
+Nobody on the business side wants to write SQL.
+Nobody wants to ctrl+F through 50 PDFs.
+They just want to open Slack, ask a question, and get the answer.
+
+That's the problem I solved."
+
+[pause]
+
+"The naive approach is — take the question, call GPT, return the
+answer. I tried that first. It works for maybe 2 out of 10 queries.
+The moment someone asks something like 'which customers are at risk
+AND have a contract above 1M' — you need SQL. The moment someone
+asks 'what failure patterns show up across BlueHarbor's support
+calls' — you need semantic document search. One approach alone
+doesn't cut it.
+
+So I built a proper 5-layer agentic system."
+
+
+----------------------------------------------------------------
+LIVE DEMO FIRST — show before explaining (1-2 min)
+----------------------------------------------------------------
+
+[Open Slack, type in the channel]
+
+Query 1 (simple):
+"@Northstar how many customers do we have?"
+
+-- Point out: "Thinking..." appears immediately
+-- Point out: message updates live — Classifying → Searching → Generating
+-- Show the answer coming back with source citation
+
+Query 2 (complex):
+"@Northstar do we have a recurring Canada approval-bypass pattern
+across accounts or is MapleBridge basically a one-off? Give me
+the customer names and the shared failure pattern."
+
+-- Let it run, show the live updates
+-- Show the answer — cross-document pattern analysis
+
+"That second query — it's going through documents from multiple
+customers, finding a common theme, and synthesizing it into a
+plain English answer. Let me show you how."
+
+
+----------------------------------------------------------------
+LAYER 1 — SLACK INTERFACE (30 sec)
+----------------------------------------------------------------
+
+"The first layer is just the Slack adapter. slack_handler.py.
+
+It does three things only:
+
+One — security. We use Socket Mode. The bot connects outbound
+to Slack over a WebSocket. There is no inbound webhook. Nothing
+to forge. Slack handles authentication on their end.
+
+Two — UX. The moment the @mention comes in, we post 'Thinking...'
+immediately. Then update that same message live as the agent
+progresses. Final answer replaces it in place. Thread stays clean.
+
+Three — threading. Every reply goes in the same thread_ts. The
+bot fetches the last 10 messages from the thread before running,
+so followup questions work with full context.
+
+The key thing — the entire agent below this layer knows nothing
+about Slack. It takes a string, returns a string. If tomorrow
+someone wants WhatsApp — I only change this layer."
+
+
+----------------------------------------------------------------
+LAYER 2 — QUERY CLASSIFIER (1 min)
+----------------------------------------------------------------
+
+"Every query goes through a classifier first. This is the router.
+
+It uses an LLM call to figure out three things:
+— What TYPE of query is this? Structured SQL lookup, document
+  semantic search, or multi-hop combining both?
+— What ENTITIES are mentioned? Customer names, product names.
+— What's the SEARCH PLAN?
+
+[show the output]
+
+For 'which customers are at risk' → STRUCTURED, route to SQL.
+For 'what did BlueHarbor say in their last call' → DOCUMENT,
+  route to Weaviate.
+For the Canada approval-bypass question → MULTI_HOP, route to
+  both SQL and RAG combined.
+
+This is the decision that determines everything downstream.
+LangGraph's conditional edges handle the routing cleanly."
+
+
+----------------------------------------------------------------
+LAYER 3 — THE BRAIN — LangGraph State Machine (1.5 min)
+----------------------------------------------------------------
+
+"This is the core of everything. graph.py.
+
+[show the architecture diagram]
+
+AgentState TypedDict carries everything — messages, query type,
+retrieved results, retry count, source citations.
+
+After classification, it routes to one of three nodes:
+— sql_agent for structured queries
+— rag_search for document queries
+— multi_search for both combined
+
+After retrieval — and this is important — it goes to an
+evaluate node. An LLM-as-judge checks: are these results
+actually sufficient to answer the question?
+
+If not — conditional edge sends it BACK to search with a
+broader reformulated query. Maximum 2 retries. This is the
+self-reflection loop. It's why the bot doesn't just give up
+when the first search returns something irrelevant.
+
+Thread memory — LangGraph's MemorySaver checkpoints state
+keyed on the Slack thread timestamp. So every thread is its
+own conversation with persistent context."
+
+
+----------------------------------------------------------------
+LAYER 4 — THE TOOLS (1 min)
+----------------------------------------------------------------
+
+"Two main tools the agent calls.
+
+SQL Tool — tools/sql_tool.py
+The LLM generates a SELECT query with full schema context.
+Before execution — validated against a blocklist. DROP, DELETE,
+UPDATE, INSERT, ALTER — all blocked at the code level, not just
+in the prompt. Case insensitive so DrOp TaBlE is also caught.
+System tables blocked. SQL comments blocked to prevent bypass.
+Read only. Always.
+
+Hybrid RAG Tool — tools/rag_tool.py
+Weaviate doing two things simultaneously:
+BM25 keyword search — finds exact name and term matches.
+Dense vector semantic search — finds conceptually similar content.
+Combined with alpha=0.75 favouring semantic.
+
+So 'BlueHarbor contract' — keyword side matches the exact name.
+'Approval bypass pattern' — semantic side finds thematically
+related documents even if those exact words don't appear.
+Pure semantic alone misses exact names. Pure keyword alone
+misses themes. Hybrid covers both."
+
+
+----------------------------------------------------------------
+LAYER 5 — GENERATION + VERIFICATION (1 min)
+----------------------------------------------------------------
+
+"generate.py — two pass process.
+
+Pass 1: Take all retrieved results, convert to natural prose,
+re-rank chunks by semantic similarity to the question, cap at
+15 most relevant, generate answer with a strict grounding prompt.
+'Every claim must be directly supported by the context.'
+
+Pass 2: Second LLM call — verifier checks every specific fact
+in the answer. Customer names, numbers, statuses. If any claim
+is not supported by the retrieved context — VERDICT REVISE —
+it rewrites with only the verified facts.
+
+[show an example if possible]
+
+This 2-pass process is the main reason factual correctness
+went from 0.60 to 0.83."
+
+
+----------------------------------------------------------------
+RAGAS EVALUATION — THE PROOF (1 min)
+----------------------------------------------------------------
+
+"I didn't just manually test a few queries and call it done.
+I ran RAGAS — Retrieval Augmented Generation Assessment —
+which is the standard evaluation framework for RAG systems.
+
+5 metrics. Threshold is 0.70.
+
+[show the table]
+
+                    BEFORE    AFTER
+Faithfulness        0.554     0.632   (improving)
+Answer Relevancy    0.780     0.950   PASS
+Context Precision   0.744     0.748   PASS
+Context Recall      0.800     1.000   PASS
+Factual Correctness 0.600     0.830   PASS
+
+4 out of 5 above threshold.
+
+Faithfulness is the stubborn one — RAGAS marks it unsupported
+when the LLM writes '$1.8M' but the context says '1800000'.
+The answer is correct, RAGAS can't fuzzy match numbers.
+Factual correctness at 0.830 is the more honest measure.
+
+Context recall hitting 1.000 — perfect. We're retrieving
+everything needed to answer the question every single time."
+
+
+----------------------------------------------------------------
+CACHING — THE SPEED LAYER (30 sec)
+----------------------------------------------------------------
+
+"One more thing I added — query cache. cache.py.
+
+In-memory LRU cache, 5 minute TTL, 200 entries max.
+
+First time someone asks 'which customers are at risk' —
+full agent pipeline, 5-10 seconds, LLM calls.
+
+Second time anyone asks the same question —
+sub-millisecond. Zero LLM calls. Instant.
+
+Queries are normalized before caching so 'which customers
+are at risk' and 'Which Customers Are At Risk' hit the
+same cache entry.
+
+Cache stats at GET /cache. Clear it at DELETE /cache."
+
+
+----------------------------------------------------------------
+WHERE IT BREAKS + WHAT I'D DO NEXT (1 min)
+----------------------------------------------------------------
+
+"I'll be honest about the limits.
+
+This breaks at around 50 concurrent users. Here's exactly why:
+
+SQLite — file level locking. 50 simultaneous queries = queue.
+Fix: PostgreSQL with connection pooling. LangGraph has a
+built-in PostgresSaver — one swap and state is shared across
+all instances.
+
+Single FastAPI process — one agent run is 3-10 seconds of
+LLM calls. Can't handle burst traffic.
+Fix: K8s with multiple pods, Celery/Redis for background
+agent runs, message queue for Slack events so nothing drops.
+
+In-memory cache — dies on restart, not shared across instances.
+Fix: Redis with semantic caching. Similar questions hit the same
+cache even if phrased differently. Saves 40-60% API cost at scale.
+
+Model inference — every query hits OpenAI cold.
+Fix: self-hosted vLLM for generation, keep OpenAI for
+classification only. Or gpt-4o-mini for fast nodes,
+gpt-4o for generation where quality matters.
+
+All of this is documented. The architecture is designed to
+support these changes — they're upgrades, not rewrites."
+
+
+----------------------------------------------------------------
+CLOSING LINE
+----------------------------------------------------------------
+
+"So to summarize what's actually here:
+
+LangGraph state machine with conditional routing
+→ SQL tool + hybrid RAG tool
+→ self-reflection loop
+→ LangSmith tracing
+→ Slack thread memory
+
+5 layers, each with one job, none knowing about the others.
+RAGAS evaluation with 4 out of 5 metrics passing.
+Security at every layer — input, SQL, output.
+And a clear documented path from MVP to production scale.
+
+Happy to go deeper on any part."
+
+
+================================================================
+THINGS TO KEEP HANDY DURING DEMO
+================================================================
+
+Slack queries to use:
+1. "how many customers do we have?"           (simple SQL)
+2. "which customers are at risk?"             (SQL list)
+3. "which customers are expanding?"           (SQL filter)
+4. "what is BlueHarbor's contract value?"     (SQL lookup)
+5. "which customers have highest contract values?" (SQL rank)
+6. "do we have a recurring Canada approval-bypass pattern
+    across accounts?"                         (complex RAG)
+
+Health check URLs:
+   curl http://localhost:3000/health
+   curl http://localhost:3000/cache
+
+Run RAGAS live if asked:
+   python tests/test_ragas_eval.py
+
+Architecture diagram:  show the flow diagram image
+
+RAGAS table to show:
+   Metric               Before   After
+   Faithfulness         0.554    0.632
+   Answer Relevancy     0.780    0.950
+   Context Precision    0.744    0.748
+   Context Recall       0.800    1.000
+   Factual Correctness  0.600    0.830
+
+================================================================

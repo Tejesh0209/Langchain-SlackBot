@@ -1,0 +1,32 @@
+# Slack / FastAPI (Layer 1)
+slack-bolt>=1.18.0
+slack-sdk>=3.21.0
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+
+# LangChain / LangGraph (Layers 3, 4)
+langgraph>=0.0.20
+langchain-core>=0.1.10
+langchain-openai>=0.0.5
+
+# Vector store (Layer 5)
+weaviate-client>=4.4.0
+
+# LLM (Layers 2, 4)
+openai>=1.10.0
+
+# Infrastructure
+structlog>=24.1.0
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+python-dotenv>=1.0.0
+
+# Database
+aiosqlite>=0.19.0
+
+# Testing
+pytest>=7.4.0
+pytest-asyncio>=0.23.0
+
+# Evaluation
+ragas>=0.2.0

@@ -1,0 +1,42 @@
+# Env / secrets
+.env
+*.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+env/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# LangGraph checkpointer
+*.sqlite
+*.sqlite-journal
+
+# Weaviate (local data)
+data/weaviate/
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+logs/

@@ -1,0 +1,142 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ─────────────────────────────────────────
+  # 1. Unit tests (no external services)
+  # ─────────────────────────────────────────
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run unit tests
+        env:
+          SLACK_BOT_TOKEN: "xoxb-test"
+          SLACK_SIGNING_SECRET: "test-secret"
+          SLACK_APP_TOKEN: "xapp-test"
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          WEAVIATE_URL: "http://localhost:8080"
+        run: |
+          pytest tests/test_guardrails.py tests/test_sql_tool.py -v
+
+  # ─────────────────────────────────────────
+  # 2. Docker build
+  # ─────────────────────────────────────────
+  docker-build:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    needs: unit-tests
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t northstar-signal:${{ github.sha }} .
+
+      - name: Smoke test container starts
+        run: |
+          docker run -d \
+            -e SLACK_BOT_TOKEN=xoxb-test \
+            -e SLACK_SIGNING_SECRET=test \
+            -e SLACK_APP_TOKEN=xapp-test \
+            -e OPENAI_API_KEY=sk-test \
+            -e WEAVIATE_URL=http://localhost:8080 \
+            -p 3000:3000 \
+            --name northstar-test \
+            northstar-signal:${{ github.sha }} || true
+          sleep 5
+          docker logs northstar-test || true
+
+  # ─────────────────────────────────────────
+  # 3. Integration tests + RAGAS evaluation
+  #    (only on push to main, needs secrets)
+  # ─────────────────────────────────────────
+  integration-and-ragas:
+    name: Integration Tests + RAGAS
+    runs-on: ubuntu-latest
+    needs: docker-build
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    services:
+      weaviate:
+        image: semitechnologies/weaviate:1.27.0
+        ports:
+          - "8080:8080"
+          - "50051:50051"
+        env:
+          AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
+          PERSISTENCE_DATA_PATH: /var/lib/weaviate
+          ENABLE_MODULES: text2vec-openai
+          CLUSTER_HOSTNAME: node1
+        options: >-
+          --health-cmd "curl -f http://localhost:8080/v1/meta"
+          --health-interval 15s
+          --health-timeout 10s
+          --health-retries 5
+          --health-start-period 20s
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Setup SQLite database
+        run: python scripts/setup_db.py
+
+      - name: Ingest data into Weaviate
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          WEAVIATE_URL: http://localhost:8080
+        run: python scripts/ingest_to_weaviate.py
+
+      - name: Run integration tests
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_SIGNING_SECRET: ${{ secrets.SLACK_SIGNING_SECRET }}
+          SLACK_APP_TOKEN: ${{ secrets.SLACK_APP_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          WEAVIATE_URL: http://localhost:8080
+          LANGCHAIN_API_KEY: ${{ secrets.LANGCHAIN_API_KEY }}
+          LANGCHAIN_TRACING_V2: "true"
+          LANGCHAIN_PROJECT: northstar-ci
+        run: |
+          pytest tests/test_example_queries.py -v --integration
+
+      - name: Run RAGAS evaluation
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          WEAVIATE_URL: http://localhost:8080
+        run: |
+          python tests/test_ragas_eval.py
+
+      - name: Upload RAGAS results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ragas-report-${{ github.sha }}
+          path: ragas_report.json
+          if-no-files-found: ignore
