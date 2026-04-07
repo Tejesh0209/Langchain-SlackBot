@@ -1,6 +1,3 @@
-
----
-
 ## How I Approached This Problem
 
 Honestly my first thought was just — call GPT, pass the question, done. That approach works for maybe 2 out of 10 queries. Then I tried it for "which customers are expanding AND have contract above 1M?" and obviously that needs SQL. Then I tried "what failure patterns show up across BlueHarbor's support calls?" and that needs semantic document search. So I had to actually think properly.
@@ -278,76 +275,14 @@ python tests/test_ragas_eval.py
 
 ---
 
-## Slack App Setup — Create Your Bot and Get the Credentials
+## Slack App Setup
 
-You need three credentials from Slack to run this app. Here's exactly where to get each one.
-
-### Step 1 — Create the App
-
-1. Go to https://api.slack.com/apps
-2. Click **Create New App** → choose **From scratch**
-3. Give it a name (e.g. "Northstar Signal") and pick your workspace
-4. Click **Create App**
-
-### Step 2 — Get your Signing Secret (`SLACK_SIGNING_SECRET`)
-
-1. In the left sidebar → **Basic Information**
-2. Scroll down to **App Credentials**
-3. Copy the **Signing Secret** — this goes in your `.env` as `SLACK_SIGNING_SECRET`
-
-### Step 3 — Add Bot Scopes and Get Bot Token (`SLACK_BOT_TOKEN`)
-
-1. Left sidebar → **OAuth & Permissions**
-2. Scroll to **Scopes** → **Bot Token Scopes** → click **Add an OAuth Scope**
-3. Add all of these one by one:
-   - `app_mentions:read`
-   - `channels:history`
-   - `chat:write`
-   - `im:history`
-   - `im:read`
-   - `im:write`
-4. Scroll back up → click **Install to Workspace** → Allow
-5. Copy the **Bot User OAuth Token** (starts with `xoxb-`) → this is your `SLACK_BOT_TOKEN`
-
-### Step 4 — Enable Socket Mode and Get App Token (`SLACK_APP_TOKEN`)
-
-1. Left sidebar → **Settings** → **Socket Mode** → toggle it **On**
-2. It will ask you to create an App-Level Token
-3. Give it a name (anything, e.g. "socket-token")
-4. Add scope: `connections:write`
-5. Click **Generate**
-6. Copy the token (starts with `xapp-`) → this is your `SLACK_APP_TOKEN`
-
-### Step 5 — Subscribe to Events
-
-1. Left sidebar → **Event Subscriptions** → toggle **Enable Events** on
-2. Under **Subscribe to bot events** → click **Add Bot User Event**
-3. Add: `app_mention`
-4. Add: `message.im`
-5. Click **Save Changes**
-
-### Step 6 — Put It All in Your `.env`
-
-```env
-SLACK_BOT_TOKEN=xoxb-...        # from Step 3
-SLACK_SIGNING_SECRET=...         # from Step 2
-SLACK_APP_TOKEN=xapp-...         # from Step 4
-OPENAI_API_KEY=sk-...
-WEAVIATE_URL=http://localhost:8080
-DATABASE_PATH=data/synthetic_startup.sqlite
-LOG_LEVEL=INFO
-MAX_RETRY_COUNT=2
-SQL_ROW_LIMIT=20
-```
-
-### Step 7 — Invite the Bot to a Channel
-
-After starting the server, go to your Slack workspace:
-1. Open the channel where you want to use the bot
-2. Type `/invite @YourBotName`
-3. Now `@mention` the bot and it will respond
-
-For DMs — just open a direct message with the bot directly, no invite needed.
+1. Go to api.slack.com/apps, create new app
+2. OAuth & Permissions → add scopes: `app_mentions:read`, `channels:history`, `chat:write`, `im:history`, `im:read`, `im:write`
+3. Settings → Socket Mode → enable it
+4. Generate App-Level Token with `connections:write` scope → this is your `SLACK_APP_TOKEN` (starts with xapp-)
+5. Event Subscriptions → subscribe to `app_mention` and `message.im`
+6. Install to workspace
 
 ---
 
@@ -380,42 +315,14 @@ Max 2 retries before it gives up and answers with what it has. No infinite loops
 
 ### User Experience
 
-Slack doesn't support streaming. A 10 second wait with zero feedback feels broken. Here's how I handled it:
+Slack doesn't support streaming. Here's how I handled that:
+1. "Thinking..." posted within ~200ms of receiving the message
+2. Same message updates live — "Classifying query..." → "Searching database..." → "Generating response..."
+3. Final answer replaces the thinking message in-place. Thread stays clean.
 
-**Live progress updates — the bot tells you exactly what it's doing:**
+Conversation memory: fetches last 10 messages from the thread before running agent. Thread timestamp is the conversation ID. Followup questions work.
 
-```
-User: @Northstar which customers are at risk?
-
-Bot: Thinking... I'll look into this for you.
-  ↓ (updates same message)
-Bot: Classifying query...
-  ↓ (updates same message)
-Bot: Searching database...
-  ↓ (updates same message)
-Bot: Generating response...
-  ↓ (updates same message)
-Bot: The customers with account health 'at risk' are:
-     BlueHarbor Logistics, City of Verdant Bay...
-     Sources: SQL query on customers
-```
-
-Every stage updates the same Slack message in place — no extra messages cluttering the thread. The user always knows the bot is working and what it's doing.
-
-The stages and what triggers them:
-- **"Thinking... I'll look into this for you"** — posted immediately on @mention (~200ms)
-- **"Classifying query..."** — classify node starts
-- **"Searching database..."** — SQL agent or multi_search starts
-- **"Searching documents..."** — RAG search starts
-- **"Generating response..."** — generate node starts
-
-This is handled by a module-level callback registry in `src/agent/progress.py`. Each graph node calls `progress.report(thread_ts, step)` and the Slack handler updates the message. The LangGraph state doesn't need to carry the Slack client — clean separation.
-
-**Conversation memory:**
-Fetches last 10 messages from the thread before running agent. Thread timestamp is the conversation ID for LangGraph's checkpointer. Followup questions like "what about their contract value?" work because the bot already has the full thread context.
-
-**Error handling:**
-Every error path posts a readable message to Slack. The bot never silently fails and leaves the user staring at "Thinking..." forever.
+Every error path posts something readable to Slack. The bot never silently fails and leaves the user staring at "Thinking..." forever.
 
 ---
 
